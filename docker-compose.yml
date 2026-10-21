@@ -12,6 +12,10 @@ services:
       - MCP_TRANSPORT=http
       - MCP_HTTP_PORT=8080
       - MCP_HTTP_HOST=0.0.0.0
+      # The host publish above is loopback-only, so this plain-HTTP hop never
+      # leaves the machine. For anything else, put a TLS proxy in front or
+      # use MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE instead.
+      - MCP_TRUSTED_TLS_INGRESS=1
       - AUTH_MODE=gateway
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - "CONDUIT_S2S_SECRET=${CONDUIT_S2S_SECRET:?set CONDUIT_S2S_SECRET}"

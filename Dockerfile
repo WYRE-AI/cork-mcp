@@ -44,6 +44,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # 0.0.0.0 is safe here only because startup refuses to listen without a real
 # CONDUIT_S2S_SECRET. MCP_ALLOW_INSECURE_DEV=1 refuses this host and binds
 # 127.0.0.1 only. AUTH_MODE=gateway never falls back to image env credentials.
+# Binding 0.0.0.0 over plain HTTP is refused unless the deployment sets
+# MCP_TLS_CERT_FILE + MCP_TLS_KEY_FILE or MCP_TRUSTED_TLS_INGRESS=1. This
+# image deliberately sets neither.
 ENV NODE_ENV=production
 ENV LOG_LEVEL=info
 ENV MCP_TRANSPORT=http

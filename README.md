@@ -19,9 +19,20 @@ Copy [`.env.example`](.env.example) and set the variables below. Leave `CONDUIT_
 | `MCP_ALLOW_INSECURE_DEV` | Set to exactly `1` only for local development to start HTTP without `CONDUIT_S2S_SECRET`. The process logs a warning, does not enforce `X-Gateway-S2S`, and binds `127.0.0.1` only. A non-loopback `MCP_HTTP_HOST` (including `0.0.0.0`) refuses to start. A known placeholder secret still refuses to start when this flag is set. |
 | `MCP_HTTP_HOST` | Bind address when `MCP_TRANSPORT=http`. Unset binds `127.0.0.1`. A configured `CONDUIT_S2S_SECRET` honors this value, including `0.0.0.0`. The container image sets `0.0.0.0`. |
 | `MCP_HTTP_PORT` | HTTP port. Defaults to `8080`. |
+| `MCP_TLS_CERT_FILE` / `MCP_TLS_KEY_FILE` | PEM certificate and key paths. Set both to serve HTTPS in-process. Setting only one, or an unreadable file, exits non-zero. |
+| `MCP_TRUSTED_TLS_INGRESS` | Set to exactly `1` when TLS terminates at a trusted ingress in front of this listener. Allows plain HTTP on a non-loopback host and logs a warning. |
 | `LOG_LEVEL` | `debug` \| `info` (default) \| `warn` \| `error`. |
 
 `/health` stays unauthenticated and does not read credentials. The stdio transport does not use `CONDUIT_S2S_SECRET`.
+
+### Transport security (TLS)
+
+`X-Cork-Api-Key` is sent on every request, so plain HTTP must not cross a network. Loopback binds (`127.0.0.0/8`, `::1`, `localhost`) are always allowed. A non-loopback `MCP_HTTP_HOST` (including `0.0.0.0`) refuses to start unless one of these is set:
+
+- `MCP_TLS_CERT_FILE` + `MCP_TLS_KEY_FILE`: the server serves HTTPS itself.
+- `MCP_TRUSTED_TLS_INGRESS=1`: TLS terminates at a trusted ingress (for example Azure Container Apps internal ingress) and the hop to this listener is private. Plain HTTP is served and a warning is logged.
+
+Startup order: the `CONDUIT_S2S_SECRET` check, then the listen host is resolved, then this TLS check, then listen. The container image binds `0.0.0.0`, so deployments must set one of the two options above.
 
 ### HTTP authentication
 
@@ -121,17 +132,18 @@ npm run lint   # tsc --noEmit
 
 ## Docker
 
-The image listens on `0.0.0.0` inside the container (`MCP_HTTP_HOST`) and defaults to `AUTH_MODE=gateway`. Publish the port on loopback and pass the S2S secret. In gateway mode the Cork API key arrives on each request as `X-Cork-Api-Key`; it is not read from the environment.
+The image listens on `0.0.0.0` inside the container (`MCP_HTTP_HOST`) and defaults to `AUTH_MODE=gateway`. Publish the port on loopback, pass the S2S secret, and set `MCP_TRUSTED_TLS_INGRESS=1` (or the TLS file variables), since the image refuses to listen on `0.0.0.0` over plain HTTP otherwise. In gateway mode the Cork API key arrives on each request as `X-Cork-Api-Key`; it is not read from the environment.
 
 ```bash
 docker build -t cork-mcp .
 docker run \
   -e CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
+  -e MCP_TRUSTED_TLS_INGRESS=1 \
   -p 127.0.0.1:8080:8080 \
   cork-mcp
 ```
 
-Compose refuses to start when `CONDUIT_S2S_SECRET` is unset, sets `AUTH_MODE=gateway`, publishes `127.0.0.1:8080:8080`, and does not set `CORK_API_KEY` or `env_file`:
+Compose refuses to start when `CONDUIT_S2S_SECRET` is unset, sets `AUTH_MODE=gateway` and `MCP_TRUSTED_TLS_INGRESS=1` (the host publish is loopback-only), publishes `127.0.0.1:8080:8080`, and does not set `CORK_API_KEY` or `env_file`:
 
 ```bash
 CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" docker compose up
@@ -144,6 +156,7 @@ docker run \
   -e CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
   -e AUTH_MODE=env \
   -e CORK_API_KEY="$CORK_API_KEY" \
+  -e MCP_TRUSTED_TLS_INGRESS=1 \
   -p 127.0.0.1:8080:8080 \
   cork-mcp
 ```

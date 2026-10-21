@@ -6,7 +6,7 @@
  * bypass binds 127.0.0.1 only. Gateway-mode /mcp requests without
  * X-Cork-Api-Key are 401 and must not consult process.env credentials.
  */
-import type { Server } from 'node:http';
+import type { Server } from 'node:net';
 import { createHmac } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,6 +39,9 @@ const ENV_KEYS = [
   'MCP_HTTP_HOST',
   'CONDUIT_S2S_SECRET',
   'MCP_ALLOW_INSECURE_DEV',
+  'MCP_TRUSTED_TLS_INGRESS',
+  'MCP_TLS_CERT_FILE',
+  'MCP_TLS_KEY_FILE',
   'CORK_API_KEY',
   'LOG_LEVEL',
 ] as const;
@@ -316,6 +319,7 @@ describe('HTTP startup fails closed without CONDUIT_S2S_SECRET', () => {
     delete process.env.MCP_ALLOW_INSECURE_DEV;
     process.env.MCP_HTTP_PORT = '0';
     process.env.MCP_HTTP_HOST = '0.0.0.0';
+    process.env.MCP_TRUSTED_TLS_INGRESS = '1';
     process.env.LOG_LEVEL = 'info';
 
     const captured = captureConsoleError();

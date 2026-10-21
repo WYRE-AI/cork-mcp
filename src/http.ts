@@ -1,4 +1,11 @@
-import { createServer as createHttpServer, type Server } from 'node:http';
+import { readFileSync } from 'node:fs';
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import type { Server as NetServer } from 'node:net';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer } from './server.js';
 import { runWithCredentials } from './client.js';
@@ -12,6 +19,13 @@ import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
 // real secret is set, every /mcp request must carry a valid X-Gateway-S2S
 // header and MCP_HTTP_HOST is honored. The secret value is never logged.
 // Read at startup, not at module load, so tests can exercise each branch.
+//
+// Transport security (CWE-319). X-Cork-Api-Key travels on every request, so
+// startup order is: S2S fail-closed check, then resolve the listen host,
+// then the TLS/bind check below, then listen. A loopback host may use plain
+// HTTP. A non-loopback host needs MCP_TLS_CERT_FILE + MCP_TLS_KEY_FILE
+// (in-process HTTPS) or MCP_TRUSTED_TLS_INGRESS=1 (plain HTTP with a
+// warning, TLS terminated at a trusted ingress). Otherwise it exits 1.
 
 const KNOWN_PLACEHOLDER_SECRETS = new Set([
   'replace-with-a-real-secret',
@@ -45,6 +59,11 @@ const INSECURE_DEV_NON_LOOPBACK_ERROR =
 
 const LOOPBACK_HOST = '127.0.0.1';
 
+const TLS_REQUIRED_ERROR =
+  'Refusing to start HTTP server: binding a non-loopback host over plain HTTP would send X-Cork-Api-Key in cleartext (CWE-319). ' +
+  'Bind 127.0.0.1, or set MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE to serve HTTPS, ' +
+  'or set MCP_TRUSTED_TLS_INGRESS=1 when TLS terminates at a trusted ingress in front of this listener.';
+
 const S2S_UNAUTHORIZED = {
   error: 'Missing or invalid X-Gateway-S2S header: this endpoint only accepts requests signed by the gateway.',
 };
@@ -59,7 +78,7 @@ function readS2sSecret(): { secret: string; isPlaceholder: boolean } {
   return { secret: isPlaceholder ? '' : raw, isPlaceholder };
 }
 
-function isLoopbackHost(host: string): boolean {
+export function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
   if (normalized === 'localhost' || normalized === '::1' || normalized === '[::1]') return true;
   const bare = normalized.startsWith('::ffff:') ? normalized.slice('::ffff:'.length) : normalized;
@@ -96,6 +115,43 @@ function resolveBindHost(insecureDev: boolean): string {
   process.exit(1);
 }
 
+/**
+ * TLS/bind policy for the resolved host. Returns the TLS material to serve
+ * HTTPS with, or undefined for plain HTTP. Exits 1 when the combination is
+ * unsafe or misconfigured. Never logs file contents.
+ */
+function resolveTls(host: string, port: number): { cert: Buffer; key: Buffer } | undefined {
+  const certPath = (process.env.MCP_TLS_CERT_FILE ?? '').trim();
+  const keyPath = (process.env.MCP_TLS_KEY_FILE ?? '').trim();
+  if (certPath && keyPath) {
+    try {
+      const tls = { cert: readFileSync(certPath), key: readFileSync(keyPath) };
+      logger.info(`TLS enabled: serving HTTPS (cert=${certPath}, key=${keyPath})`);
+      return tls;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+      logger.error(`Refusing to start HTTP server: cannot read TLS files (cert=${certPath}, key=${keyPath}): ${code}`);
+      process.exit(1);
+    }
+  }
+  if (certPath || keyPath) {
+    const missing = certPath ? 'MCP_TLS_KEY_FILE' : 'MCP_TLS_CERT_FILE';
+    logger.error(`Refusing to start HTTP server: ${missing} is not set. MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set together.`);
+    process.exit(1);
+  }
+  if (isLoopbackHost(host)) return undefined;
+  if (process.env.MCP_TRUSTED_TLS_INGRESS === '1') {
+    // error level so LOG_LEVEL=error cannot hide it (same as the dev bypass).
+    logger.error(
+      `SECURITY WARNING: serving plain HTTP on ${host}:${port} because MCP_TRUSTED_TLS_INGRESS=1; ` +
+        'TLS must terminate at a trusted ingress in front of this listener and the hop to it must be private.'
+    );
+    return undefined;
+  }
+  logger.error(TLS_REQUIRED_ERROR);
+  process.exit(1);
+}
+
 function singleHeader(value: string | string[] | undefined): string | undefined {
   if (typeof value === 'string') return value;
   if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
@@ -119,11 +175,22 @@ function credentialHeader(value: string | string[] | undefined): string | undefi
  * without that flag. With a secret, every /mcp request must carry a valid
  * X-Gateway-S2S header; /health stays unauthenticated.
  *
- * @returns The listening `Server`, once `listen` has succeeded.
+ * Startup order: the S2S check above, then the listen host is resolved,
+ * then the transport-security check (CWE-319), then listen. Loopback hosts
+ * (127.0.0.0/8, ::1, localhost) may use plain HTTP. For any other host:
+ * - MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE both set: serve HTTPS in-process.
+ * - MCP_TRUSTED_TLS_INGRESS=1: serve plain HTTP and log one warning; TLS must
+ *   terminate at a trusted ingress.
+ * - Neither: log an error and call process.exit(1) before anything listens.
+ * Setting only one of the two TLS variables, or pointing at an unreadable
+ * file, also exits 1. Both set on a loopback host serves HTTPS too.
+ *
+ * @returns The listening `Server` (HTTPS when TLS files are set), once
+ *   `listen` has succeeded.
  * @throws Rejects with the bind error (for example EADDRINUSE or EACCES) if
  *   the port cannot be bound.
  */
-export async function startHttpServer(): Promise<Server> {
+export async function startHttpServer(): Promise<NetServer> {
   const { secret, isPlaceholder } = readS2sSecret();
   const insecureDev = enforceS2sSecretOrExit(secret, isPlaceholder);
 
@@ -135,9 +202,11 @@ export async function startHttpServer(): Promise<Server> {
     // claim the server is starting.
     logger.error(INSECURE_DEV_WARNING);
   }
+  const tls = resolveTls(host, port);
+  const scheme = tls ? 'https' : 'http';
   const isGatewayMode = process.env.AUTH_MODE === 'gateway';
 
-  const httpServer = createHttpServer(async (req, res) => {
+  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // Fixed base: a malformed Host header must not throw before auth.
     let url: URL;
     try {
@@ -223,7 +292,9 @@ export async function startHttpServer(): Promise<Server> {
     }
 
     await handle().catch(fail);
-  });
+  };
+
+  const httpServer: NetServer = tls ? createHttpsServer(tls, handler) : createHttpServer(handler);
 
   return new Promise((resolve, reject) => {
     httpServer.once('error', reject);
@@ -231,7 +302,7 @@ export async function startHttpServer(): Promise<Server> {
       const bound = httpServer.address();
       const shown =
         typeof bound === 'object' && bound ? `${bound.address}:${bound.port}` : `${host}:${port}`;
-      logger.info(`HTTP streaming server listening on ${shown}`);
+      logger.info(`HTTP streaming server listening on ${shown} (${scheme})`);
       resolve(httpServer);
     });
   });
