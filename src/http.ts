@@ -6,92 +6,10 @@ import { logger } from './utils/logger.js';
 import { MAX_REQUEST_BODY_BYTES } from './input-limits.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
 
-// Conduit service-to-service auth. HTTP startup fails closed (CWE-306): an
-// empty CONDUIT_S2S_SECRET, or a known placeholder, refuses to boot unless
-// MCP_ALLOW_INSECURE_DEV=1 (placeholders never qualify). That bypass skips
-// X-Gateway-S2S and is limited to loopback. A configured secret is always
-// enforced on /mcp. The secret value is never logged. See src/s2s-verify.ts.
-
-/** Public example values. A copied placeholder must not verify as a real secret. */
-const KNOWN_PLACEHOLDER_SECRETS = new Set([
-  'replace-with-a-real-secret',
-  'your-s2s-secret',
-  'your-secret',
-  'changeme',
-  'change-me',
-  'placeholder',
-  'secret',
-  'example',
-  'replace-me',
-  's2s-secret',
-]);
-
-const LOOPBACK_HOST = '127.0.0.1';
-
-const MISSING_S2S_SECRET_ERROR =
-  'Refusing to start HTTP transport: CONDUIT_S2S_SECRET is empty. ' +
-  'Set CONDUIT_S2S_SECRET, or set MCP_ALLOW_INSECURE_DEV=1 for local development only.';
-
-const PLACEHOLDER_S2S_SECRET_ERROR =
-  'Refusing to start HTTP transport: CONDUIT_S2S_SECRET is a known placeholder. ' +
-  'Generate a secret with `openssl rand -hex 32` and set CONDUIT_S2S_SECRET to that value. ' +
-  'MCP_ALLOW_INSECURE_DEV does not bypass a placeholder secret.';
-
-const NON_LOOPBACK_INSECURE_DEV_ERROR =
-  'Refusing to start HTTP transport: MCP_ALLOW_INSECURE_DEV=1 without CONDUIT_S2S_SECRET ' +
-  'is limited to loopback, but MCP_HTTP_HOST is a non-loopback address. ' +
-  'Unset MCP_HTTP_HOST or set a real CONDUIT_S2S_SECRET.';
-
-const INSECURE_DEV_WARNING =
-  'SECURITY WARNING: CONDUIT_S2S_SECRET is empty and MCP_ALLOW_INSECURE_DEV=1. ' +
-  'HTTP /mcp is not enforcing X-Gateway-S2S and is limited to loopback (127.0.0.1). ' +
-  'Do not use this outside local development.';
-
-function isLoopbackHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase().replace(/^\[(.+)\]$/, '$1');
-  return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1';
-}
-
-/**
- * Secret for X-Gateway-S2S on /mcp. Read at HTTP startup, not module load.
- * Empty is fail-closed unless MCP_ALLOW_INSECURE_DEV=1. A known placeholder
- * always refuses, including when the dev flag is set. Throws to refuse; the
- * CLI entry point logs and exits 1.
- */
-function resolveS2sSecret(): string {
-  const secret = (process.env.CONDUIT_S2S_SECRET ?? '').trim();
-  if (secret && KNOWN_PLACEHOLDER_SECRETS.has(secret.toLowerCase())) {
-    throw new Error(PLACEHOLDER_S2S_SECRET_ERROR);
-  }
-  if (secret) return secret;
-
-  if (process.env.MCP_ALLOW_INSECURE_DEV === '1') {
-    // error level so LOG_LEVEL=warn|error cannot hide the bypass.
-    logger.error(INSECURE_DEV_WARNING);
-    return '';
-  }
-
-  throw new Error(MISSING_S2S_SECRET_ERROR);
-}
-
-/**
- * No secret (insecure-dev only) binds 127.0.0.1 and refuses a non-loopback
- * MCP_HTTP_HOST. A configured secret honors MCP_HTTP_HOST, defaulting to
- * 0.0.0.0 so container deploys stay unchanged.
- */
-function resolveListenHost(s2sSecret: string): string {
-  const configured = (process.env.MCP_HTTP_HOST ?? '').trim();
-  if (s2sSecret) return configured || '0.0.0.0';
-  if (configured && !isLoopbackHost(configured)) {
-    throw new Error(NON_LOOPBACK_INSECURE_DEV_ERROR);
-  }
-  return LOOPBACK_HOST;
-}
-
 export async function startHttpServer(): Promise<HttpServer> {
-  const s2sSecret = resolveS2sSecret();
-  const host = resolveListenHost(s2sSecret);
+  const S2S_SECRET = process.env.CONDUIT_S2S_SECRET || '';
   const port = parseInt(process.env.MCP_HTTP_PORT || '8080', 10);
+  const host = process.env.MCP_HTTP_HOST || '0.0.0.0';
   const isGatewayMode = process.env.AUTH_MODE === 'gateway';
 
   const httpServer = createHttpServer(async (req, res) => {
@@ -122,8 +40,7 @@ export async function startHttpServer(): Promise<HttpServer> {
       return;
     }
 
-    // Empty s2sSecret is only reachable when MCP_ALLOW_INSECURE_DEV=1 (loopback).
-    if (s2sSecret && !verifyS2sHeader(req.headers[S2S_HEADER] as string | undefined, s2sSecret)) {
+    if (S2S_SECRET && !verifyS2sHeader(req.headers[S2S_HEADER] as string | undefined, S2S_SECRET)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
@@ -182,7 +99,7 @@ export async function startHttpServer(): Promise<HttpServer> {
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
     httpServer.listen(port, host, () => {
-      logger.info(`HTTP streaming server listening on ${host}:${port}`, { s2sEnforced: s2sSecret !== '' });
+      logger.info(`HTTP streaming server listening on ${host}:${port}`);
       resolve();
     });
   });

@@ -13,10 +13,10 @@
  * forge a header that verifies here. This function doesn't need to know
  * that; it just checks whatever secret it's handed.
  *
- * Empty secret => always returns false. http.ts refuses to start the HTTP
- * transport with an empty or placeholder CONDUIT_S2S_SECRET (fail closed,
- * CWE-306) unless MCP_ALLOW_INSECURE_DEV=1, which skips this check on
- * loopback only.
+ * Empty secret => always returns false. The caller is expected to treat an
+ * empty CONDUIT_S2S_SECRET as "S2S enforcement disabled" (dark-by-default,
+ * matches the dormant/pre-provisioning state) rather than calling this at
+ * all - see the enforcement check in http.ts.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
