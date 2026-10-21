@@ -40,8 +40,6 @@ curl -sS http://127.0.0.1:8080/mcp \
 
 In `AUTH_MODE=gateway`, `/mcp` also requires `X-Cork-Api-Key`. A request without that header is HTTP 401 and does not fall back to `CORK_API_KEY` in the process environment. `AUTH_MODE=env` still requires a valid `X-Gateway-S2S` header, then uses `CORK_API_KEY`.
 
-**Transport security:** the HTTP transport speaks plain HTTP, and `X-Cork-Api-Key` and `X-Gateway-S2S` travel in cleartext on that hop. Expose it only behind a TLS-terminating trusted ingress (for example Azure Container Apps with internal-only ingress) or on a private network. Never expose it directly to an untrusted network. The S2S HMAC authenticates the caller; it does not encrypt the traffic.
-
 ## Tools
 
 ### Clients
