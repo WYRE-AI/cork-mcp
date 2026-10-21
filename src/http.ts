@@ -50,7 +50,16 @@ export async function startHttpServer(): Promise<HttpServer> {
       return;
     }
 
-    // Body cap runs only after S2S passes so unauthenticated callers still get 401.
+    // Gateway mode requires the per-request vendor credential; check it before
+    // the body cap so missing credentials get 401, not 413.
+    const apiKey = isGatewayMode ? (req.headers['x-cork-api-key'] as string | undefined) : undefined;
+    if (isGatewayMode && !apiKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing X-Cork-Api-Key header.' }));
+      return;
+    }
+
+    // Body cap runs only after S2S and credential checks so unauthenticated callers still get 401.
     const contentLength = Number(req.headers['content-length']);
     if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
       res.writeHead(413, { 'Content-Type': 'application/json' });
@@ -63,8 +72,6 @@ export async function startHttpServer(): Promise<HttpServer> {
       );
       return;
     }
-
-    const apiKey = isGatewayMode ? (req.headers['x-cork-api-key'] as string | undefined) : undefined;
 
     const handle = async () => {
       // SECURITY-CRITICAL invariant: this transport MUST stay stateless

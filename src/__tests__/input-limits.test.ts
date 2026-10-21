@@ -48,10 +48,8 @@ describe('countToolInputElements', () => {
   });
 
   it('builds the McpServer-compatible error result', () => {
-    expect(toolInputTooLargeResult('t')).toEqual({
-      content: [
-        { type: 'text', text: 'Invalid arguments for tool t: arguments contain more than the maximum of 10000 elements' },
-      ],
+    expect(toolInputTooLargeResult()).toEqual({
+      content: [{ type: 'text', text: 'Tool input exceeds the maximum of 10000 elements' }],
       isError: true,
     });
   });
@@ -134,6 +132,20 @@ describe('HTTP request limits', () => {
     const invalid = await post(port, { 'x-gateway-s2s': 't=1,v1=deadbeef' }, OVERSIZED);
     expect(missing.status).toBe(401);
     expect(invalid.status).toBe(401);
+  });
+
+  it('returns 401 for an oversized gateway-mode request with valid S2S but no credential header', async () => {
+    process.env.AUTH_MODE = 'gateway';
+    const port = await listen();
+    const res = await post(port, { 'x-gateway-s2s': s2s() }, OVERSIZED);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 413 for an oversized gateway-mode request with S2S and credential header', async () => {
+    process.env.AUTH_MODE = 'gateway';
+    const port = await listen();
+    const res = await post(port, { 'x-gateway-s2s': s2s(), 'x-cork-api-key': 'k' }, OVERSIZED);
+    expect(res.status).toBe(413);
   });
 
   it('serves a normal initialize and tools/list', async () => {
