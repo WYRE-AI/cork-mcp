@@ -13,8 +13,16 @@ Cork authenticates with a static **Bearer API key**, generated in Cork's Admin U
 | `CORK_API_KEY` | Bearer API key issued by Cork's Admin UI. |
 | `MCP_TRANSPORT` | `stdio` (default) or `http`. |
 | `AUTH_MODE` | `env` (default, reads the var above) or `gateway` (credential arrives per-request via the `X-Cork-Api-Key` header, injected by the Conduit gateway). |
-| `CONDUIT_S2S_SECRET` | When set, the HTTP transport requires a valid `X-Gateway-S2S` header (Conduit sidecar auth) on every `/mcp` request. |
+| `CONDUIT_S2S_SECRET` | **Required for the HTTP transport.** Every `/mcp` request must carry a valid `X-Gateway-S2S` header (Conduit sidecar auth). `/health` stays unauthenticated. Generate with `openssl rand -hex 32`. |
+| `MCP_ALLOW_INSECURE_DEV` | Set to `1` for local development only: allows HTTP startup with an empty `CONDUIT_S2S_SECRET`, skips the S2S check, and binds `127.0.0.1` only. |
+| `MCP_HTTP_HOST` / `MCP_HTTP_PORT` | HTTP bind address (default `0.0.0.0` with a secret) and port (default `8080`). |
 | `LOG_LEVEL` | `debug` \| `info` (default) \| `warn` \| `error`. |
+
+### HTTP transport S2S auth (fail closed)
+
+The HTTP transport refuses to start without a real `CONDUIT_S2S_SECRET` (generate one with `openssl rand -hex 32`). An empty value or a known placeholder (for example `changeme` or `replace-with-a-real-secret`) makes startup fail with a non-zero exit. This matches the fleet fail-closed S2S pattern (conduit#2194) and closes CWE-306 (missing authentication).
+
+For local development only, set `MCP_ALLOW_INSECURE_DEV=1` with an empty secret. The server logs a `SECURITY WARNING`, does not enforce `X-Gateway-S2S`, and binds `127.0.0.1` only; it refuses to start if `MCP_HTTP_HOST` is a non-loopback address. The flag never bypasses a placeholder secret. Tracking: WYREAI-454.
 
 ### Request limits
 
