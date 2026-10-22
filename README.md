@@ -27,7 +27,7 @@ Copy [`.env.example`](.env.example) and set the variables below. Leave `CONDUIT_
 
 ### Transport security (TLS)
 
-`X-Cork-Api-Key` is sent on every request, so plain HTTP must not cross a network. Loopback binds (`127.0.0.0/8`, `::1`, `localhost`) are always allowed. A non-loopback `MCP_HTTP_HOST` (including `0.0.0.0`) refuses to start unless one of these is set:
+In `AUTH_MODE=gateway`, `X-Cork-Api-Key` is sent on every `/mcp` request, so plain HTTP must not cross a network. Regardless of `AUTH_MODE`, the rule below applies. Loopback binds (`127.0.0.0/8`, `::1`, `localhost`) are always allowed. A non-loopback `MCP_HTTP_HOST` (including `0.0.0.0`) refuses to start unless one of these is set:
 
 - `MCP_TLS_CERT_FILE` + `MCP_TLS_KEY_FILE`: the server serves HTTPS itself.
 - `MCP_TRUSTED_TLS_INGRESS=1`: TLS terminates at a trusted ingress (for example Azure Container Apps internal ingress) and the hop to this listener is private. Plain HTTP is served and a warning is logged.
